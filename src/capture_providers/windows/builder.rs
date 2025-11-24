@@ -3,7 +3,7 @@ use windows::Graphics::{Capture::GraphicsCaptureItem, DirectX::Direct3D11::IDire
 use crate::capture_providers::{
     CaptureError,
     windows::{
-        capture::WindowsCaptureProvider,
+        capture_provider::WindowsCaptureProvider,
         d3d11_utils::{create_d3d_device, native_to_winrt_d3d11device},
     },
 };

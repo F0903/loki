@@ -21,11 +21,11 @@ type Result<T> = CaptureResult<T>;
 
 #[derive(Debug)]
 pub struct WindowsCaptureProvider {
-    device: IDirect3DDevice,
-    frame_pool: Option<Direct3D11CaptureFramePool>,
-    capture_item: Option<GraphicsCaptureItem>,
-    session: Option<GraphicsCaptureSession>,
-    staging_texture: Arc<RwLock<Option<ID3D11Texture2D>>>,
+    device: IDirect3DDevice,                        /* Free-threaded object */
+    frame_pool: Option<Direct3D11CaptureFramePool>, /* Free-threaded object */
+    capture_item: Option<GraphicsCaptureItem>,      /* Free-threaded object */
+    session: Option<GraphicsCaptureSession>,        /* Free-threaded object */
+    staging_texture: Arc<RwLock<Option<ID3D11Texture2D>>>, /* Free-threaded object */
 
     stream_close_tx: tokio::sync::mpsc::Sender<i64>,
     stream_close_rx: tokio::sync::mpsc::Receiver<i64>,
@@ -53,6 +53,11 @@ impl WindowsCaptureProvider {
     }
 
     pub fn set_capture_item(&mut self, capture_item: GraphicsCaptureItem) -> Result<()> {
+        println!(
+            "Setting capture item: {}",
+            capture_item.DisplayName().unwrap_or("<no name>".into())
+        );
+
         let size = capture_item.Size()?;
         self.capture_item = Some(capture_item);
 
@@ -71,6 +76,7 @@ impl WindowsCaptureProvider {
     }
 
     /// Creates a new stream for receiving frames.
+    /// Must be called on a COM thread.
     pub fn create_stream(&self) -> Result<WindowsCaptureStream> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
 
@@ -170,8 +176,6 @@ impl WindowsCaptureProvider {
                     d
                 };
 
-                //TODO: fix crash
-
                 let staging_tex = { staging_tex_ptr.blocking_read().clone() };
                 let staging_tex = match staging_tex {
                     Some(staging_tex) => staging_tex,
@@ -185,11 +189,11 @@ impl WindowsCaptureProvider {
                             }
                         }
 
-                        let new_staging_tex = tex
+                        let staging_tex = tex
                             .assume_init()
                             .expect("Failed to create staging texture!");
-                        *staging_tex_ptr.blocking_write() = Some(new_staging_tex);
-                        staging_tex.clone().unwrap()
+                        *staging_tex_ptr.blocking_write() = Some(staging_tex.clone());
+                        staging_tex
                     },
                 };
 
@@ -229,6 +233,7 @@ impl WindowsCaptureProvider {
 
                 let send_result = tx.blocking_send(Frame {
                     data,
+                    format: crate::capture_providers::shared::PixelFormat::BGRA8,
                     size: Vector2 {
                         x: size.Width,
                         y: size.Height,
@@ -249,6 +254,7 @@ impl WindowsCaptureProvider {
         Ok(stream)
     }
 
+    /// Must be called on a COM thread.
     pub fn start_capture(&mut self) -> Result<()> {
         if self.capturing {
             return Err(CaptureError::AlreadyCapturing);
@@ -296,6 +302,7 @@ impl WindowsCaptureProvider {
         Ok(())
     }
 
+    /// Must be called on a COM thread.
     pub fn poll_stream_closer(&mut self) -> Result<()> {
         loop {
             let next = self.stream_close_rx.try_recv();
@@ -310,6 +317,7 @@ impl WindowsCaptureProvider {
         Ok(())
     }
 
+    /// Must be called on a COM thread.
     pub(super) fn unregister_frame_arrived(&self, token: i64) -> Result<()> {
         let frame_pool = match &self.frame_pool {
             Some(frame_pool) => frame_pool,
@@ -328,3 +336,7 @@ impl Drop for WindowsCaptureProvider {
         self.stop_capture().ok();
     }
 }
+
+// WindowsCaptureProvider holds agile COM objects that are thread-safe. But since they are raw pointers, they are not Send or Sync.
+unsafe impl Send for WindowsCaptureProvider {}
+unsafe impl Sync for WindowsCaptureProvider {}

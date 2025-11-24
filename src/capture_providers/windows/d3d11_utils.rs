@@ -91,6 +91,8 @@ impl IntoHWND for u64 {
     }
 }
 
+/// Shows a dialog in the specified window to pick an item to capture.
+/// Returned future completes when the user picks an item or cancels the dialog.
 pub(crate) fn user_pick_capture_item(
     window: impl IntoHWND,
 ) -> Result<impl Future<Output = Result<GraphicsCaptureItem>>> {
@@ -106,7 +108,7 @@ pub(super) fn read_texture<const BYTES_PER_PIXEL: usize>(
     source_tex: ID3D11Texture2D,
     staging_tex: ID3D11Texture2D,
     tex_desc: &D3D11_TEXTURE2D_DESC,
-) -> std::result::Result<Bytes, crate::CaptureError> {
+) -> std::result::Result<Vec<u8>, crate::CaptureError> {
     unsafe {
         context.CopyResource(&staging_tex, &source_tex);
 
@@ -135,6 +137,6 @@ pub(super) fn read_texture<const BYTES_PER_PIXEL: usize>(
         }
         context.Unmap(&staging_tex, 0);
 
-        Ok(Bytes::from_owner(frame_bytes))
+        Ok(frame_bytes)
     }
 }

@@ -4,6 +4,9 @@ description = "An extremely work-in-progress screen sharing application."
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+winres = "0.1"
+
 [dependencies]
 iced = { version = "0.14.0-dev", git = "https://github.com/iced-rs/iced", features = [
     "tokio",

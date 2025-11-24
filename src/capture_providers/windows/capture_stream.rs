@@ -37,7 +37,7 @@ impl Stream for WindowsCaptureStream {
 impl Drop for WindowsCaptureStream {
     fn drop(&mut self) {
         if let Some(closer) = self.closer.take() {
-            closer.blocking_send(self.frame_arrived_token).ok();
+            closer.try_send(self.frame_arrived_token).ok();
         }
     }
 }

@@ -3,11 +3,10 @@ use crate::{
         shared::Frame,
         windows::{WindowsCaptureProvider, WindowsCaptureStream, user_pick_capture_item},
     },
-    utils::UnsafeSendWrapper,
+    utils::image_utils::ensure_image_rgba,
 };
 use iced::{
     Element, Length, Program, Subscription, Task, executor,
-    wgpu::rwh::RawWindowHandle,
     widget::{self, button, column, container, row},
     window,
 };
@@ -15,7 +14,7 @@ use std::{
     hash::{Hash, Hasher},
     sync::Arc,
 };
-use tokio::{sync::Mutex, task::LocalKey};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use windows::Graphics::Capture::GraphicsCaptureItem;
 
 #[derive(Debug, Clone)]
@@ -30,23 +29,31 @@ impl Hash for FrameReceiverSubData {
     }
 }
 
-#[derive(Debug, Clone)]
 pub enum Message {
     StartCapture,
     CaptureStarted,
     StopCapture,
+    CaptureStopped,
+
     WindowsUserPickedCaptureItem(windows::core::Result<GraphicsCaptureItem>),
     FrameReceived(Frame),
+
+    CaptureProviderAction(
+        OwnedMutexGuard<WindowsCaptureProvider>,
+        Box<dyn FnOnce(OwnedMutexGuard<WindowsCaptureProvider>) + Send>,
+    ),
+
     WindowOpened(window::Id),
     WindowIdFetched(u64),
+
     Error(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct MutableState {
     active_window_handle: Option<u64>,
     capturing: bool,
-    latest_frame: Option<Frame>,
+    latest_frame: std::sync::Mutex<Option<Frame>>,
 }
 
 #[derive(Debug)]
@@ -108,7 +115,7 @@ impl Program for App {
     fn boot(&self) -> (Self::State, Task<Self::Message>) {
         (
             MutableState {
-                latest_frame: None,
+                latest_frame: std::sync::Mutex::new(None),
                 capturing: false,
                 active_window_handle: None,
             },
@@ -155,7 +162,8 @@ impl Program for App {
                     }
                 };
 
-                let capture_item_future = match user_pick_capture_item(window_handle) {
+                // Returned future completes when the user picks a capture item
+                let user_pick_future = match user_pick_capture_item(window_handle) {
                     Ok(item) => item,
                     Err(err) => {
                         return Task::done(Message::Error(format!(
@@ -165,7 +173,31 @@ impl Program for App {
                     }
                 };
 
-                Task::future(capture_item_future).map(Message::WindowsUserPickedCaptureItem)
+                Task::future(user_pick_future).map(Message::WindowsUserPickedCaptureItem)
+            }
+            Message::CaptureStarted => {
+                state.capturing = true;
+                Task::none()
+            }
+            Message::StopCapture => {
+                let capture_arc = self.capture.clone();
+                Task::perform(
+                    async move { capture_arc.lock_owned().await },
+                    |mut capture| {
+                        if let Err(err) = capture.stop_capture() {
+                            eprintln!("Failed to stop capture: {}", err);
+                        }
+                        if let Err(err) = capture.poll_stream_closer() {
+                            eprintln!("Failed to poll stream closer: {}", err);
+                        }
+
+                        Message::CaptureStopped
+                    },
+                )
+            }
+            Message::CaptureStopped => {
+                state.capturing = false;
+                Task::none()
             }
             Message::WindowsUserPickedCaptureItem(capture_item_result) => {
                 let capture_item = match capture_item_result {
@@ -178,7 +210,9 @@ impl Program for App {
                     }
                 };
 
-                let mut capture = self.capture.blocking_lock();
+                //TODO: Implement async waiting for capture lock, but then still call methods on it on the main thread.
+                let capture_arc = self.capture.clone();
+                let mut capture = capture_arc.blocking_lock_owned();
 
                 if let Err(err) = capture.set_capture_item(capture_item) {
                     return Task::done(Message::Error(format!(
@@ -192,24 +226,11 @@ impl Program for App {
 
                 Task::done(Message::CaptureStarted)
             }
-            Message::CaptureStarted => {
-                state.capturing = true;
-                Task::none()
-            }
-            Message::StopCapture => {
-                state.capturing = false;
-
-                let mut capture = self.capture.blocking_lock();
-                if let Err(err) = capture.stop_capture() {
-                    eprintln!("Failed to stop capture: {}", err);
-                }
-                if let Err(err) = capture.poll_stream_closer() {
-                    eprintln!("Failed to poll stream closer: {}", err);
-                }
-                Task::none()
-            }
             Message::FrameReceived(frame) => {
-                state.latest_frame = Some(frame);
+                match state.latest_frame.get_mut() {
+                    Ok(lock) => *lock = Some(frame),
+                    Err(err) => eprintln!("Failed to get mutable lock for latest frame: {}", err),
+                };
                 Task::none()
             }
             Message::Error(err) => {
@@ -238,12 +259,34 @@ impl Program for App {
         .into();
 
         let screen_share_preview: Element<'a, Self::Message, Self::Theme, Self::Renderer> =
-            match &state.latest_frame {
-                Some(frame) => {
-                    widget::image(widget::image::Handle::from_bytes(frame.data.clone())).into()
+            (|| {
+                let mut frame_lock = match state.latest_frame.lock() {
+                    Ok(frame_lock) => frame_lock,
+                    Err(err) => {
+                        let err_msg = format!("Failed to get frame lock: {}", err);
+                        eprintln!("{}", err_msg);
+                        return widget::text(err_msg).into();
+                    }
+                };
+
+                match &mut *frame_lock {
+                    Some(frame) => {
+                        if let Err(err) = ensure_image_rgba(&mut frame.data, &mut frame.format) {
+                            let err_msg = format!("Frame format conversion failed: {}", err);
+                            eprintln!(" {}", err_msg);
+                            return widget::text(err_msg).into();
+                        }
+
+                        widget::image(widget::image::Handle::from_rgba(
+                            frame.size.x as u32,
+                            frame.size.y as u32,
+                            frame.data.clone(),
+                        ))
+                        .into()
+                    }
+                    None => widget::text("No preview available.").into(),
                 }
-                None => widget::text("No preview available.").into(),
-            };
+            })();
 
         column([control_buttons, screen_share_preview]).into()
     }
