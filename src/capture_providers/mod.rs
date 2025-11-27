@@ -1,13 +1,22 @@
+mod capture_provider;
 pub mod shared;
 pub mod windows;
 
+pub use capture_provider::CaptureProvider;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
+    #[cfg(target_os = "windows")]
     #[error(transparent)]
     WindowsCaptureError(#[from] windows::error::WindowsCaptureError),
 }
 
-type CaptureResult<T> = std::result::Result<T, CaptureError>;
+#[cfg(target_os = "windows")]
+pub use windows::WindowsCaptureProvider as PlatformCaptureProvider;
+#[cfg(target_os = "windows")]
+pub use windows::WindowsCaptureStream as PlatformCaptureStream;
+#[cfg(target_os = "windows")]
+pub use windows::user_pick_capture_item as user_pick_platform_capture_item;
 
-//TODO: use this instead of specifying the windows one. This also allows for other platforms to be added in the future.
-trait CaptureProvider {}
+#[cfg(target_os = "windows")]
+pub type PlatformCaptureItem = <windows::WindowsCaptureProvider as CaptureProvider>::CaptureItem;

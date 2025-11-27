@@ -98,7 +98,7 @@ impl IntoHWND for u64 {
 
 /// Shows a dialog in the specified window to pick an item to capture.
 /// Returned future completes when the user picks an item or cancels the dialog.
-pub(crate) fn user_pick_capture_item(
+pub fn user_pick_capture_item(
     window: impl IntoHWND,
 ) -> Result<impl Future<Output = Result<GraphicsCaptureItem>>> {
     tracing::info!("Initializing GraphicsCapturePicker...");

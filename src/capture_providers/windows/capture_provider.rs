@@ -16,6 +16,7 @@ use windows::{
 };
 
 use crate::capture_providers::{
+    CaptureProvider,
     shared::{BytesPerPixel, CaptureFramerate, Frame, PixelFormat, ToDirectXPixelFormat, Vector2},
     windows::{WindowsCaptureStream, d3d11_utils::read_texture, error::WindowsCaptureError},
 };
@@ -36,8 +37,8 @@ impl WindowsCaptureProvider {
     const FRAME_COUNT: i32 = 2;
     const PIXEL_FORMAT: PixelFormat = PixelFormat::BGRA8;
 
-    pub fn new(device: IDirect3DDevice, item: Option<GraphicsCaptureItem>) -> super::Result<Self> {
-        Ok(Self {
+    pub fn new(device: IDirect3DDevice, item: Option<GraphicsCaptureItem>) -> Self {
+        Self {
             device,
             frame_pool: None,
             capture_item: item,
@@ -45,30 +46,7 @@ impl WindowsCaptureProvider {
             staging_texture: Arc::new(RwLock::new(None)),
             active_handlers: Vec::new(),
             capturing: false,
-        })
-    }
-
-    pub fn set_capture_item(&mut self, capture_item: GraphicsCaptureItem) -> super::Result<()> {
-        tracing::info!(
-            "Setting capture item: {}",
-            capture_item.DisplayName().unwrap_or("<no name>".into())
-        );
-
-        let size = capture_item.Size()?;
-        self.capture_item = Some(capture_item);
-
-        let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-            &self.device,
-            Self::PIXEL_FORMAT.to_directx_pixel_format(),
-            Self::FRAME_COUNT,
-            size,
-        )?;
-        self.frame_pool = Some(frame_pool);
-
-        // Disabled for testing reasons, uncomment later
-        //session.SetIsCursorCaptureEnabled(true)?;
-        //session.SetIsBorderRequired(false)?;
-        Ok(())
+        }
     }
 
     fn process_frame(
@@ -212,12 +190,31 @@ impl WindowsCaptureProvider {
         Ok(())
     }
 
-    /// Creates a new stream for receiving frames.
+    fn unregister_frame_arrived(&mut self, token: i64) -> super::Result<()> {
+        // Check if the handler is still active (it might have been removed by stop_capture already)
+        if let Some(pos) = self.active_handlers.iter().position(|&t| t == token) {
+            self.active_handlers.remove(pos);
 
-    pub fn create_stream(
-        &mut self,
-        framerate: CaptureFramerate,
-    ) -> super::Result<WindowsCaptureStream> {
+            let frame_pool = match &self.frame_pool {
+                Some(frame_pool) => frame_pool,
+                None => {
+                    return Ok(());
+                }
+            };
+
+            frame_pool.RemoveFrameArrived(token)?;
+        }
+        Ok(())
+    }
+}
+
+impl CaptureProvider for WindowsCaptureProvider {
+    type Result<T> = super::Result<T>;
+    type Stream = WindowsCaptureStream;
+    type CaptureItem = GraphicsCaptureItem;
+
+    /// Creates a new stream for receiving frames.
+    fn create_stream(&mut self, framerate: CaptureFramerate) -> Self::Result<Self::Stream> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
 
         // We can't send self raw to the closure, so we need to just copy the staging texture which is inside an Arc Mutex.
@@ -298,8 +295,30 @@ impl WindowsCaptureProvider {
         Ok(stream)
     }
 
-    /// Must be called on a COM thread.
-    pub fn start_capture(&mut self) -> super::Result<()> {
+    fn set_capture_item(&mut self, capture_item: Self::CaptureItem) -> Self::Result<()> {
+        tracing::info!(
+            "Setting capture item: {}",
+            capture_item.DisplayName().unwrap_or("<no name>".into())
+        );
+
+        let size = capture_item.Size()?;
+        self.capture_item = Some(capture_item);
+
+        let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+            &self.device,
+            Self::PIXEL_FORMAT.to_directx_pixel_format(),
+            Self::FRAME_COUNT,
+            size,
+        )?;
+        self.frame_pool = Some(frame_pool);
+
+        // Disabled for testing reasons, uncomment later
+        //session.SetIsCursorCaptureEnabled(true)?;
+        //session.SetIsBorderRequired(false)?;
+        Ok(())
+    }
+
+    fn start_capture(&mut self) -> Self::Result<()> {
         if self.capturing {
             return Err(WindowsCaptureError::AlreadyCapturing);
         }
@@ -335,7 +354,7 @@ impl WindowsCaptureProvider {
         Ok(())
     }
 
-    pub fn stop_capture(&mut self) -> super::Result<()> {
+    fn stop_capture(&mut self) -> Self::Result<()> {
         if !self.capturing {
             return Err(WindowsCaptureError::NotCapturing);
         }
@@ -350,23 +369,6 @@ impl WindowsCaptureProvider {
         self.session.take(); // Drop the old session
         self.capturing = false;
 
-        Ok(())
-    }
-
-    pub(super) fn unregister_frame_arrived(&mut self, token: i64) -> super::Result<()> {
-        // Check if the handler is still active (it might have been removed by stop_capture already)
-        if let Some(pos) = self.active_handlers.iter().position(|&t| t == token) {
-            self.active_handlers.remove(pos);
-
-            let frame_pool = match &self.frame_pool {
-                Some(frame_pool) => frame_pool,
-                None => {
-                    return Ok(());
-                }
-            };
-
-            frame_pool.RemoveFrameArrived(token)?;
-        }
         Ok(())
     }
 }

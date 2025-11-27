@@ -10,19 +10,19 @@ use iced::{
     window,
 };
 use tokio::sync::Mutex;
-use windows::Graphics::Capture::GraphicsCaptureItem;
 
 use crate::{
     capture_providers::{
+        CaptureProvider, PlatformCaptureItem, PlatformCaptureProvider, PlatformCaptureStream,
         shared::{CaptureFramerate, Frame, PixelFormat, Vector2},
-        windows::{WindowsCaptureProvider, WindowsCaptureStream, user_pick_capture_item},
+        user_pick_platform_capture_item,
     },
     ui::frame_viewer,
 };
 
 #[derive(Debug, Clone)]
 struct FrameReceiverSubData {
-    capture: Arc<Mutex<WindowsCaptureProvider>>,
+    capture: Arc<Mutex<PlatformCaptureProvider>>,
     framerate: CaptureFramerate,
     stream_name: &'static str,
 }
@@ -40,8 +40,8 @@ pub enum Message {
     StopCapture,
     CaptureStopped,
 
-    WindowsUserPickedCaptureItem(windows::core::Result<GraphicsCaptureItem>),
-    TryStartCapture(GraphicsCaptureItem),
+    PlatformUserPickedCaptureItem(Result<PlatformCaptureItem, String>),
+    TryStartCapture(PlatformCaptureItem),
     TryStopCapture,
     FrameReceived(Frame),
     FrameRateSelected(CaptureFramerate),
@@ -65,19 +65,19 @@ pub(crate) struct MutableState {
 
 #[derive(Debug)]
 pub(crate) struct App {
-    capture: Arc<Mutex<WindowsCaptureProvider>>,
+    capture: Arc<Mutex<PlatformCaptureProvider>>,
 }
 
 impl App {
     const APP_TITLE: &'static str = "loki";
 
     pub fn new(
-        capture: Arc<Mutex<WindowsCaptureProvider>>,
+        capture: Arc<Mutex<PlatformCaptureProvider>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self { capture })
     }
 
-    fn create_frame_receiver_subscription(data: &FrameReceiverSubData) -> WindowsCaptureStream {
+    fn create_frame_receiver_subscription(data: &FrameReceiverSubData) -> PlatformCaptureStream {
         tracing::info!("Creating frame receiver sub with framerate: {}", data.framerate);
         data.capture
             .blocking_lock()
@@ -86,16 +86,6 @@ impl App {
     }
 
     pub fn run(self) -> crate::Result<()> {
-        // #[cfg(debug_assertions)]
-        // iced_debug::init(iced_debug::Metadata {
-        //     name: Self::APP_TITLE,
-        //     theme: None,
-        //     can_time_travel: false,
-        // });
-
-        // #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
-        // let program = iced_devtools::attach(self);
-
         iced_winit::run(self)?;
         Ok(())
     }
@@ -175,19 +165,19 @@ impl Program for App {
                 };
 
                 // Returned future completes when the user picks a capture item
-                let user_pick_future = match user_pick_capture_item(window_handle) {
-                    Ok(item) => item,
+                match user_pick_platform_capture_item(window_handle) {
+                    Ok(future) => Task::future(async move {
+                        match future.await {
+                            Ok(item) => Message::PlatformUserPickedCaptureItem(Ok(item)),
+                            Err(e) => Message::PlatformUserPickedCaptureItem(Err(e.to_string())),
+                        }
+                    }),
                     Err(err) => {
-                        return Task::done(Message::Error(format!(
-                            "Failed to pick capture item: {}",
-                            err
-                        )));
+                        Task::done(Message::Error(format!("Failed to pick capture item: {}", err)))
                     }
-                };
-
-                Task::future(user_pick_future).map(Message::WindowsUserPickedCaptureItem)
+                }
             }
-            Message::WindowsUserPickedCaptureItem(capture_item_result) => {
+            Message::PlatformUserPickedCaptureItem(capture_item_result) => {
                 let capture_item = match capture_item_result {
                     Ok(item) => item,
                     Err(err) => {

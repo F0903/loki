@@ -56,6 +56,6 @@ impl WindowsCaptureProviderBuilder {
             tracing::error!("Attempted to build WindowsCaptureProvider without a device");
             BuilderError::MissingDevice
         })?;
-        WindowsCaptureProvider::new(device, self.capture_item).map_err(Into::into)
+        Ok(WindowsCaptureProvider::new(device, self.capture_item))
     }
 }
