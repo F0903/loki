@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use tokio::sync::{RwLock, mpsc::error::TryRecvError};
+use tokio::sync::RwLock;
 use windows::{
     Foundation::TypedEventHandler,
     Graphics::{Capture::*, DirectX::Direct3D11::*},
@@ -28,9 +28,7 @@ pub struct WindowsCaptureProvider {
     session: Option<GraphicsCaptureSession>,        /* Free-threaded object */
     staging_texture: Arc<RwLock<Option<ID3D11Texture2D>>>, /* Free-threaded object */
 
-    stream_close_tx: tokio::sync::mpsc::Sender<i64>,
-    stream_close_rx: tokio::sync::mpsc::Receiver<i64>,
-
+    active_handlers: Vec<i64>,
     capturing: bool,
 }
 
@@ -39,17 +37,13 @@ impl WindowsCaptureProvider {
     const PIXEL_FORMAT: PixelFormat = PixelFormat::BGRA8;
 
     pub fn new(device: IDirect3DDevice, item: Option<GraphicsCaptureItem>) -> super::Result<Self> {
-        let (stream_close_tx, stream_close_rx) = tokio::sync::mpsc::channel(32);
         Ok(Self {
             device,
             frame_pool: None,
             capture_item: item,
             session: None,
             staging_texture: Arc::new(RwLock::new(None)),
-
-            stream_close_tx,
-            stream_close_rx,
-
+            active_handlers: Vec::new(),
             capturing: false,
         })
     }
@@ -117,7 +111,7 @@ impl WindowsCaptureProvider {
             }
         };
 
-        tracing::debug!("Frame: {} x {}, ptr={:?}", size.Width, size.Height, texture.as_raw());
+        tracing::trace!("Frame: {} x {}, ptr={:?}", size.Width, size.Height, texture.as_raw());
 
         let device = unsafe {
             match texture.GetDevice() {
@@ -205,18 +199,23 @@ impl WindowsCaptureProvider {
             dirty_regions,
         );
 
-        let send_result = tx.blocking_send(frame);
-        if let Err(err) = send_result {
-            tracing::error!("Could not send frame! {}", err);
+        match tx.try_send(frame) {
+            Ok(_) => (),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!("Frame sender closed whilst trying to send frame.");
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                tracing::debug!("Frame channel full, dropping frame.");
+            }
         }
 
         Ok(())
     }
 
     /// Creates a new stream for receiving frames.
-    /// Must be called on a COM thread.
+
     pub fn create_stream(
-        &self,
+        &mut self,
         framerate: CaptureFramerate,
     ) -> super::Result<WindowsCaptureStream> {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
@@ -292,8 +291,9 @@ impl WindowsCaptureProvider {
                 Ok(())
             }))?;
 
-        let stream =
-            WindowsCaptureStream::new(self.stream_close_tx.clone(), rx, frame_arrived_token);
+        self.active_handlers.push(frame_arrived_token);
+
+        let stream = WindowsCaptureStream::new(rx);
 
         Ok(stream)
     }
@@ -340,37 +340,33 @@ impl WindowsCaptureProvider {
             return Err(WindowsCaptureError::NotCapturing);
         }
 
+        for token in self.active_handlers.clone() {
+            if let Err(e) = self.unregister_frame_arrived(token) {
+                tracing::warn!("Failed to remove frame handler during stop: {}", e);
+            }
+        }
+        self.active_handlers.clear();
+
         self.session.take(); // Drop the old session
         self.capturing = false;
 
         Ok(())
     }
 
-    /// Must be called on a COM thread.
-    pub fn poll_stream_closer(&mut self) -> super::Result<()> {
-        loop {
-            let next = self.stream_close_rx.try_recv();
-            match next {
-                Ok(token) => {
-                    self.unregister_frame_arrived(token)?;
+    pub(super) fn unregister_frame_arrived(&mut self, token: i64) -> super::Result<()> {
+        // Check if the handler is still active (it might have been removed by stop_capture already)
+        if let Some(pos) = self.active_handlers.iter().position(|&t| t == token) {
+            self.active_handlers.remove(pos);
+
+            let frame_pool = match &self.frame_pool {
+                Some(frame_pool) => frame_pool,
+                None => {
+                    return Ok(());
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
-            }
+            };
+
+            frame_pool.RemoveFrameArrived(token)?;
         }
-        Ok(())
-    }
-
-    /// Must be called on a COM thread.
-    pub(super) fn unregister_frame_arrived(&self, token: i64) -> super::Result<()> {
-        let frame_pool = match &self.frame_pool {
-            Some(frame_pool) => frame_pool,
-            None => {
-                return Ok(());
-            }
-        };
-
-        frame_pool.RemoveFrameArrived(token)?;
         Ok(())
     }
 }

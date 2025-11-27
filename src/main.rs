@@ -4,8 +4,6 @@ use tokio::sync::Mutex;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-use crate::capture_providers::CaptureError;
-
 mod capture_providers;
 mod ui;
 mod utils;

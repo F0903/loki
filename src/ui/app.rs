@@ -6,7 +6,7 @@ use std::{
 use bytes::Bytes;
 use iced::{
     Element, Length, Program, Subscription, Task, executor,
-    widget::{self, button, column, container, pick_list, row},
+    widget::{self, button, column, container, pick_list, row, text},
     window,
 };
 use tokio::sync::Mutex;
@@ -238,9 +238,6 @@ impl Program for App {
                     if let Err(err) = capture.stop_capture() {
                         tracing::error!("Failed to stop capture: {}", err);
                     }
-                    if let Err(err) = capture.poll_stream_closer() {
-                        tracing::error!("Failed to poll stream closer: {}", err);
-                    }
 
                     Task::done(Message::CaptureStopped)
                 }
@@ -284,14 +281,29 @@ impl Program for App {
     ) -> Element<'a, Self::Message, Self::Theme, Self::Renderer> {
         let control_row: Element<'a, Self::Message, Self::Theme, Self::Renderer> = container(
             row([
-                pick_list(
-                    CaptureFramerate::ALL,
-                    Some(state.capture_frame_rate),
-                    Message::FrameRateSelected,
-                )
-                .into(),
-                button("Start Capture").on_press(Message::StartCapture).into(),
-                button("Stop Capture").on_press(Message::StopCapture).into(),
+                if state.capturing {
+                    // Render a disabled button that shows the current value
+                    button(text(state.capture_frame_rate.to_string()))
+                        .style(iced::widget::button::secondary)
+                        .into()
+                } else {
+                    pick_list(
+                        CaptureFramerate::ALL,
+                        Some(state.capture_frame_rate),
+                        Message::FrameRateSelected,
+                    )
+                    .into()
+                },
+                button("Start Capture")
+                    .on_press_maybe(if state.capturing {
+                        None
+                    } else {
+                        Some(Message::StartCapture)
+                    })
+                    .into(),
+                button("Stop Capture")
+                    .on_press_maybe(if state.capturing { Some(Message::StopCapture) } else { None })
+                    .into(),
             ])
             .spacing(10),
         )
@@ -300,13 +312,14 @@ impl Program for App {
         .into();
 
         let screen_share_preview = match &state.frame_data {
-            Some(frame_data) => frame_viewer::frame_viewer(
+            Some(frame_data) => container(frame_viewer::frame_viewer(
                 frame_data.clone(),
                 state.frame_dimensions.x as u32,
                 state.frame_dimensions.y as u32,
-            )
+            ))
+            .center(Length::Fill)
             .into(),
-            None => widget::text("No preview available.").into(),
+            None => container(widget::text("No preview available.")).center(Length::Fill).into(),
         };
 
         column([control_row, screen_share_preview]).into()

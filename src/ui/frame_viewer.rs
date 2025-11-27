@@ -30,16 +30,34 @@ where
     Renderer: iced::advanced::image::Renderer<Handle = iced::advanced::image::Handle>,
 {
     fn size(&self) -> iced::Size<Length> {
-        iced::Size::new(Length::Fixed(self.width as f32), Length::Fixed(self.height as f32))
+        iced::Size::new(Length::Fill, Length::Fill)
     }
 
     fn layout(
         &mut self,
         _tree: &mut Tree,
         _renderer: &Renderer,
-        _limits: &layout::Limits,
+        limits: &layout::Limits,
     ) -> layout::Node {
-        layout::Node::new(Size::new(self.width as f32, self.height as f32))
+        let max_size = limits.max();
+        let src_width = self.width as f32;
+        let src_height = self.height as f32;
+
+        if src_width == 0.0 || src_height == 0.0 {
+            return layout::Node::new(Size::ZERO);
+        }
+
+        let scale_x = max_size.width / src_width;
+        let scale_y = max_size.height / src_height;
+        let scale = scale_x.min(scale_y);
+
+        let size = if scale.is_infinite() {
+            Size::new(src_width, src_height)
+        } else {
+            Size::new(src_width * scale, src_height * scale)
+        };
+
+        layout::Node::new(size)
     }
 
     fn draw(
