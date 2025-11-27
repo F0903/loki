@@ -1,11 +1,9 @@
 use windows::Graphics::{Capture::GraphicsCaptureItem, DirectX::Direct3D11::IDirect3DDevice};
 
-use crate::capture_providers::{
-    CaptureError,
-    windows::{
-        capture_provider::WindowsCaptureProvider,
-        d3d11_utils::{create_d3d_device, native_to_winrt_d3d11device},
-    },
+use crate::capture_providers::windows::{
+    WindowsCaptureError,
+    capture_provider::WindowsCaptureProvider,
+    d3d11_utils::{create_d3d_device, native_to_winrt_d3d11device},
 };
 
 type Result<T> = std::result::Result<T, BuilderError>;
@@ -15,7 +13,7 @@ pub enum BuilderError {
     #[error("Missing device")]
     MissingDevice,
     #[error("Initialization error: {0}")]
-    InitializationError(#[from] CaptureError),
+    InitializationError(#[from] WindowsCaptureError),
     #[error("Windows error: {0}")]
     WindowsError(#[from] windows::core::Error),
 }

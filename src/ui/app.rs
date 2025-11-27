@@ -6,7 +6,7 @@ use std::{
 use bytes::Bytes;
 use iced::{
     Element, Length, Program, Subscription, Task, executor,
-    widget::{self, button, column, container, row},
+    widget::{self, button, column, container, pick_list, row},
     window,
 };
 use tokio::sync::Mutex;
@@ -14,7 +14,7 @@ use windows::Graphics::Capture::GraphicsCaptureItem;
 
 use crate::{
     capture_providers::{
-        shared::{Frame, PixelFormat, Vector2},
+        shared::{CaptureFramerate, Frame, PixelFormat, Vector2},
         windows::{WindowsCaptureProvider, WindowsCaptureStream, user_pick_capture_item},
     },
     ui::frame_viewer,
@@ -23,6 +23,7 @@ use crate::{
 #[derive(Debug, Clone)]
 struct FrameReceiverSubData {
     capture: Arc<Mutex<WindowsCaptureProvider>>,
+    framerate: CaptureFramerate,
     stream_name: &'static str,
 }
 
@@ -43,6 +44,7 @@ pub enum Message {
     TryStartCapture(GraphicsCaptureItem),
     TryStopCapture,
     FrameReceived(Frame),
+    FrameRateSelected(CaptureFramerate),
 
     WindowOpened(window::Id),
     WindowIdFetched(u64),
@@ -54,6 +56,8 @@ pub enum Message {
 pub(crate) struct MutableState {
     pub active_window_handle: Option<u64>,
     pub capturing: bool,
+    pub capture_frame_rate: CaptureFramerate,
+
     pub frame_data: Option<Bytes>,
     pub frame_dimensions: Vector2<i32>,
     pub frame_format: PixelFormat,
@@ -74,7 +78,11 @@ impl App {
     }
 
     fn create_frame_receiver_subscription(data: &FrameReceiverSubData) -> WindowsCaptureStream {
-        data.capture.blocking_lock().create_stream().expect("Failed to create stream!")
+        println!("Creating frame receiver sub with framerate: {}", data.framerate);
+        data.capture
+            .blocking_lock()
+            .create_stream(data.framerate)
+            .expect("Failed to create stream!")
     }
 
     pub fn run(self) -> crate::Result<()> {
@@ -115,11 +123,12 @@ impl Program for App {
     fn boot(&self) -> (Self::State, Task<Self::Message>) {
         (
             MutableState {
+                capturing: false,
+                active_window_handle: None,
+                capture_frame_rate: CaptureFramerate::FPS60,
                 frame_data: None,
                 frame_dimensions: Vector2::new(0, 0),
                 frame_format: PixelFormat::BGRA8,
-                capturing: false,
-                active_window_handle: None,
             },
             Task::none(),
         )
@@ -133,6 +142,7 @@ impl Program for App {
                 Subscription::<Frame>::run_with(
                     FrameReceiverSubData {
                         capture: self.capture.clone(),
+                        framerate: state.capture_frame_rate,
                         stream_name: "frame-receiver",
                     },
                     Self::create_frame_receiver_subscription,
@@ -248,6 +258,10 @@ impl Program for App {
                 state.capturing = false;
                 Task::none()
             }
+            Message::FrameRateSelected(rate) => {
+                state.capture_frame_rate = rate;
+                Task::none()
+            }
             Message::FrameReceived(frame) => {
                 // Frame is already ensured to be RGBA by the provider
                 state.frame_format = frame.format;
@@ -268,8 +282,14 @@ impl Program for App {
         state: &'a Self::State,
         _window: window::Id,
     ) -> Element<'a, Self::Message, Self::Theme, Self::Renderer> {
-        let control_buttons: Element<'a, Self::Message, Self::Theme, Self::Renderer> = container(
+        let control_row: Element<'a, Self::Message, Self::Theme, Self::Renderer> = container(
             row([
+                pick_list(
+                    CaptureFramerate::ALL,
+                    Some(state.capture_frame_rate),
+                    Message::FrameRateSelected,
+                )
+                .into(),
                 button("Start Capture").on_press(Message::StartCapture).into(),
                 button("Stop Capture").on_press(Message::StopCapture).into(),
             ])
@@ -289,6 +309,6 @@ impl Program for App {
             None => widget::text("No preview available.").into(),
         };
 
-        column([control_buttons, screen_share_preview]).into()
+        column([control_row, screen_share_preview]).into()
     }
 }

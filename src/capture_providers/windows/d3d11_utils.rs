@@ -109,7 +109,7 @@ pub(super) fn read_texture(
     staging_tex: ID3D11Texture2D,
     tex_desc: &D3D11_TEXTURE2D_DESC,
     bytes_per_pixel: u32,
-) -> std::result::Result<Vec<u8>, crate::CaptureError> {
+) -> super::Result<Vec<u8>> {
     unsafe {
         context.CopyResource(&staging_tex, &source_tex);
 
