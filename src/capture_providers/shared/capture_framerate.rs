@@ -7,15 +7,19 @@ pub enum CaptureFramerate {
     FPS30,
     FPS60,
     FPS120,
+    FPS144,
+    FPS200,
 }
 
 impl CaptureFramerate {
-    pub const ALL: [CaptureFramerate; 5] = [
+    pub const ALL: [CaptureFramerate; 7] = [
         CaptureFramerate::FPS5,
         CaptureFramerate::FPS24,
         CaptureFramerate::FPS30,
         CaptureFramerate::FPS60,
         CaptureFramerate::FPS120,
+        CaptureFramerate::FPS144,
+        CaptureFramerate::FPS200,
     ];
 
     pub fn to_frametime(&self) -> Duration {
@@ -25,6 +29,8 @@ impl CaptureFramerate {
             Self::FPS30 => Duration::from_secs_f32(1 as f32 / 30 as f32),
             Self::FPS60 => Duration::from_secs_f32(1 as f32 / 60 as f32),
             Self::FPS120 => Duration::from_secs_f32(1 as f32 / 120 as f32),
+            Self::FPS144 => Duration::from_secs_f32(1 as f32 / 144 as f32),
+            Self::FPS200 => Duration::from_secs_f32(1 as f32 / 200 as f32),
         }
     }
 }
@@ -37,6 +43,8 @@ impl Display for CaptureFramerate {
             Self::FPS30 => f.write_str("30"),
             Self::FPS60 => f.write_str("60"),
             Self::FPS120 => f.write_str("120"),
+            Self::FPS144 => f.write_str("144"),
+            Self::FPS200 => f.write_str("200"),
         }
     }
 }

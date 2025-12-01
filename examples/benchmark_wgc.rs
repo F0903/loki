@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     provider.set_capture_item(item)?;
 
     // Start with 60 FPS
-    let mut stream = provider.create_stream(CaptureFramerate::FPS60)?;
+    let mut stream = provider.create_stream(CaptureFramerate::FPS120)?;
 
     provider.start_capture()?;
     tracing::info!("Capture started. Benchmarking for 30 seconds...");

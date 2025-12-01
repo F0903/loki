@@ -58,7 +58,7 @@ pub struct WgcCaptureProvider {
 }
 
 impl WgcCaptureProvider {
-    const WGC_FRAME_BUFFERS: i32 = 1;
+    const WGC_FRAME_BUFFERS: i32 = 2;
     const PIXEL_FORMAT: PixelFormat = PixelFormat::RGBA8;
     const PIPELINE_DEPTH: usize = 2;
     const TX_QUEUE_SIZE: usize = 2;
